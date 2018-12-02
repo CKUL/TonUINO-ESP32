@@ -191,8 +191,8 @@ static void previousTrack() {
 }
 
 // Replace with your network credentials
-const char* ssid     = "ASUS_CKU";
-const char* password = "annikaarnold1984";
+const char* ssid     = "yourSSID";
+const char* password = "yourPW";
 
 // Set web server port number to 80
 //WiFiServer server(80);
