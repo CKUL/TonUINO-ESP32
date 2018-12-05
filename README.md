@@ -1,5 +1,5 @@
 # TonUINO-ESP32
-_TonUINO V2.0 Code für ESP32 mit Erweiterungen_
+_[TonUINO V2.0](https://www.voss.earth/tonuino/) Code für ESP32 mit Erweiterungen, es gibt zu dem Projekt ebenfalls eine [Discourse Seite](http://discourse.voss.earth/)_
 
 **Aktuell Umgesetzt:**
   
