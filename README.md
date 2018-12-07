@@ -18,11 +18,15 @@ _[TonUINO V2.0](https://www.voss.earth/tonuino/) Code für ESP32 mit Erweiterung
     - begrenz die Lautstärke wenn Kopfhörer gesteckt
     - schaltet auf vorherige Lautstärke zurück wenn Kopfhörer nicht mehr gesteckt
     
+  - Sprachmenü und Struktur auf Tag erweitert um Ambilight Farbe zu speichern,
+    die Farbe wird geändert sobald der RFID-Tag eingelesen wurde.
+    Durch Stoppen der Wiedergabe wird auch das Licht ausgeschaltet.
+    
  **Noch offen und geplant:**
  
   - Speichern der Einstellungen im EEPROM / Flash
   - Tags verwalten
-  - Sprachmenü und Struktur auf Tag erweitern um Ambilight Farbe zu speichern
+  
   - Sonnenauf- und Untergang simulation für Ein- / Ausschalttimer
     - Funktion bereits im Code, muss debugged werden
   - AP-Modus um WLAN konfigurieren zu können ohne dies (SSID, PW) im Code fest zu verankern
