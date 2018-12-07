@@ -22,6 +22,7 @@ bool headphoneIn =0 ;
 
 unsigned long last_color = 0xFFFFFF;
 unsigned int last_Volume;
+unsigned int last_max_Volume;
 
 
 //========================================================================
@@ -52,6 +53,8 @@ unsigned int max_Volume = 20;
 unsigned int akt_Volume = 10;
 bool TMP_OFFTIME = true;
 bool TMP_ONTIME = true;
+bool WakeUpLight = false;
+bool SleepUpLight = false;
 
 //Set Pins for RC522 Module
 const int resetPin = 22; // Reset pin
@@ -67,19 +70,45 @@ struct nfcTagObject {
   uint8_t folder;
   uint8_t mode;
   uint8_t special;
+  uint32_t color;
 };
+
+//=======================Funktionen Deklarieren==============================
 
 nfcTagObject myCard;
 void resetCard(void);
 bool readCard(nfcTagObject *nfcTag);
 void setupCard(void);
 static void nextTrack();
+void startTimer(void);
+void stoppTimer(void);
 int voiceMenu(int numberOfOptions, int startMessage, int messageOffset,
               bool preview = false, int previewFromFolder = 0);
 
 bool knownCard = false;
 uint16_t numTracksInFolder;
 uint16_t track;
+
+//====================Timer Deklaration=====================================
+
+hw_timer_t * timer = NULL;
+volatile SemaphoreHandle_t timerSemaphore;
+portMUX_TYPE timerMux = portMUX_INITIALIZER_UNLOCKED;
+
+volatile uint32_t isrCounter = 0;
+volatile uint32_t lastIsrAt = 0;
+
+void IRAM_ATTR onTimer(){
+  // Increment the counter and set the time of ISR
+  portENTER_CRITICAL_ISR(&timerMux);
+  isrCounter++;
+  lastIsrAt = millis();
+  portEXIT_CRITICAL_ISR(&timerMux);
+  // Give a semaphore that we can check in the loop
+  xSemaphoreGiveFromISR(timerSemaphore, NULL);
+  // It is safe to use digitalRead/Write here if you want to toggle an output
+}
+
 // implement a notification class,
 // its member methods will get called
 //
@@ -294,7 +323,7 @@ void handleRoot(){
          char charBuf[Color.length() + 1];
          Color.toCharArray(charBuf, Color.length()+1);
          unsigned long col = strtol(charBuf,&ptr,16);
-        leds[1] = col;
+        fill_solid(leds, NUM_LEDS, col); // Farbe aller LEDs ändern
         FastLED.show(); 
       }
       else if(server.argName(i) == "LED_bri"){
@@ -303,6 +332,30 @@ void handleRoot(){
         FastLED.setBrightness(server.arg(i).toInt());
         FastLED.show(); 
       }
+      else if(server.argName(i) == "cb_SleepLight_on"){
+          //CODE HERE
+          if(server.arg(i).toInt()==1){
+              SleepUpLight = true;
+          }
+      }
+      else if(server.argName(i) == "cb_SleepLight_off"){
+          if(server.arg(i).toInt()==0){
+              SleepUpLight = false;
+          }
+      }
+      else if(server.argName(i) == "cb_WakeUpLight_on"){
+          if(server.arg(i).toInt()==1){
+              WakeUpLight = true;
+          }
+          
+      }
+      else if(server.argName(i) == "cb_WakeUpLight_off"){
+          if(server.arg(i).toInt()==0){
+              WakeUpLight = false;
+          }
+      }
+
+      
        
       }
      
@@ -420,23 +473,32 @@ void TimeCompare(){
 }
 
 void setup() {
+//======================ISR TIMER====================================================
+// Create semaphore to inform us when the timer has fired
+  timerSemaphore = xSemaphoreCreateBinary();
+
+  // Use 1st timer of 4 (counted from zero).
+  // Set 80 divider for prescaler (see ESP32 Technical Reference Manual for more
+  // info).
+  timer = timerBegin(0, 80, true);
+
+  // Attach onTimer function to our timer.
+  timerAttachInterrupt(timer, &onTimer, true);
+
+  // Set alarm to call onTimer function every second (value in microseconds).
+  // Repeat the alarm (third parameter)
+  timerAlarmWrite(timer, 1000000, true);
 
 //WS2812b Konfigurieren
 //===================================================================================
 // tell FastLED about the LED strip configuration
   FastLED.addLeds<WS2812B, DATA_PIN, RGB>(leds, NUM_LEDS);
-  //FastLED.addLeds<LED_TYPE,DATA_PIN,CLK_PIN,COLOR_ORDER>(leds, NUM_LEDS).setCorrection(TypicalLEDStrip);
-//=====================TEST=======================
-  // set master brightness control
-  FastLED.setBrightness(BRIGHTNESS);
- leds[0] = CRGB::Red;
+
+  FastLED.setBrightness(BRIGHTNESS);  //Helligkeit einstellen
+  fill_solid(leds, NUM_LEDS, CRGB::LightSkyBlue); // Farbe aller LEDs ändern
   FastLED.show();
-  delay(1000);
- leds[1] = CRGB::Green;
-  FastLED.show();
-    delay(1000);
- leds[0] = CRGB::Blue;
-  FastLED.show();
+
+
 //===================================================================================
   
   Serial.begin(115200);
@@ -606,8 +668,17 @@ void loop(){
  
   do {
     
-    server.handleClient();
+    if (xSemaphoreTake(timerSemaphore, 0) == pdTRUE){//Timer Interrupt Routine
+      uint32_t isrCount = 0, isrTime = 0;
+      // Read the interrupt count and time
+      portENTER_CRITICAL(&timerMux);
+      isrCount = isrCounter;
+      isrTime = lastIsrAt;
+      portEXIT_CRITICAL(&timerMux);
+      //Ab hier Funktionen für Timer
 
+    }
+    server.handleClient();
     TimeCompare();
     
     //myDFPlayer.loop();
@@ -617,29 +688,38 @@ void loop(){
     upButton.read();
     downButton.read();
     
-    //Erkennung ob ein Kopfhörer eingesteckt ist
+    //Erkennung ob ein Kopfhörer eingesteckt ist, "headphoneIn" verriegelt jeweils die Abfrage so das sie nur einmal durchlaufen wird
     if ((digitalRead(headphonePin)== 1) && (headphoneIn == 0)){
 
       headphoneIn = 1;
-      myDFPlayer.volume(10);
-      last_Volume = max_Volume;
+      last_max_Volume = max_Volume; // Das letzte max. Volume merken
+      last_Volume = myDFPlayer.readVolume();
       max_Volume = 10;
+      if(myDFPlayer.readVolume() >= max_Volume){
+          myDFPlayer.volume(10);
+      }
       
     } 
     else if ((digitalRead(headphonePin)== 0) && (headphoneIn == 1)){
       headphoneIn = 0;
-      max_Volume = last_Volume;
+      max_Volume = last_max_Volume;
+      myDFPlayer.volume(last_Volume);
       }
 
-  
  if (pauseButton.wasReleased()) {
       if (ignorePauseButton == false){
         if (isPlaying()){
-          myDFPlayer.pause();}
-        else{
-          myDFPlayer.start();}
-      ignorePauseButton = false;
-    } else if (pauseButton.pressedFor(LONG_PRESS) && ignorePauseButton == false) {
+          myDFPlayer.pause();
+          fill_solid(leds, NUM_LEDS, CRGB::Black); // Farbe aller LEDs ändern
+          FastLED.show();
+        }else{
+          myDFPlayer.start();
+          ignorePauseButton = false;
+    }
+   }
+ }else if (pauseButton.pressedFor(LONG_PRESS) &&
+               ignorePauseButton == false){
+      Serial.println(F("Pause taste wurde lang gedrückt"));
       if (isPlaying()){
         myDFPlayer.advertise(track);}
       else {
@@ -651,13 +731,14 @@ void loop(){
         mfrc522.PCD_StopCrypto1();
       }
       ignorePauseButton = true;
-    }
- }
+    } 
+
     if (upButton.pressedFor(LONG_PRESS)) {
       //Serial.println(F("Volume Up"));
       //myDFPlayer.volumeUp();
       nextTrack();
       ignoreUpButton = true;
+      delay(1000);
     } else if (upButton.wasReleased()) {
       if (!ignoreUpButton){
         //nextTrack();
@@ -673,6 +754,7 @@ void loop(){
       //myDFPlayer.volumeDown();
       previousTrack();
       ignoreDownButton = true;
+      delay(1000);
     } else if (downButton.wasReleased()) {
       if (!ignoreDownButton)
         //previousTrack();
@@ -703,12 +785,16 @@ void loop(){
         track = random(1, numTracksInFolder + 1);
         Serial.println(track);
         myDFPlayer.playFolder(myCard.folder, track);
+        fill_solid(leds, NUM_LEDS, myCard.color); // Farbe aller LEDs ändern
+        FastLED.show();
       }
       // Album Modus: kompletten Ordner spielen
       if (myCard.mode == 2) {
         Serial.println(F("Album Modus -> kompletten Ordner wiedergeben"));
         track = 1;
         myDFPlayer.playFolder(myCard.folder, track);
+        fill_solid(leds, NUM_LEDS, myCard.color); // Farbe aller LEDs ändern
+        FastLED.show();
       }
       // Party Modus: Ordner in zufälliger Reihenfolge
       if (myCard.mode == 3) {
@@ -716,6 +802,7 @@ void loop(){
             F("Party Modus -> Ordner in zufälliger Reihenfolge wiedergeben"));
         track = random(1, numTracksInFolder + 1);
         myDFPlayer.playFolder(myCard.folder, track);
+        fill_solid(leds, NUM_LEDS, myCard.color); // Farbe aller LEDs ändern
       }
       // Einzel Modus: eine Datei aus dem Ordner abspielen
       if (myCard.mode == 4) {
@@ -723,6 +810,8 @@ void loop(){
             F("Einzel Modus -> eine Datei aus dem Odrdner abspielen"));
         track = myCard.special;
         myDFPlayer.playFolder(myCard.folder, track);
+        fill_solid(leds, NUM_LEDS, myCard.color); // Farbe aller LEDs ändern
+        FastLED.show();
       }
       // Hörbuch Modus: kompletten Ordner spielen und Fortschritt merken
       if (myCard.mode == 5) {
@@ -730,6 +819,8 @@ void loop(){
                          "Fortschritt merken"));
         track = EEPROM.read(myCard.folder);
         myDFPlayer.playFolder(myCard.folder, track);
+        fill_solid(leds, NUM_LEDS, myCard.color); // Farbe aller LEDs ändern
+        FastLED.show();
       }
     }
 
@@ -857,6 +948,34 @@ void setupCard() {
   // Wiedergabemodus abfragen
   myCard.mode = voiceMenu(6, 310, 310);
 
+ 
+  // Farbe abfragen
+  myCard.color = voiceMenu(7,600,600);
+  switch (myCard.color) {
+  case 4:
+    myCard.color = CRGB::LawnGreen;
+    break;
+  case 3:
+    myCard.color = CRGB::Yellow;
+    break;
+  case 6:
+    myCard.color = CRGB::White;
+    break;
+  case 7:
+    myCard.color = CRGB::Plum;
+    break;
+  case 2:
+    myCard.color = CRGB::OrangeRed;
+    break;
+  case 5:
+    myCard.color = CRGB::LightSkyBlue;
+    break;
+  case 1:
+    myCard.color = CRGB::Black;
+    break;
+}
+  
+
   // Hörbuchmodus -> Fortschritt im EEPROM auf 1 setzen
   EEPROM.write(myCard.folder,1);
 
@@ -867,7 +986,7 @@ void setupCard() {
 
   // Admin Funktionen
   if (myCard.mode == 6)
-    myCard.special = voiceMenu(3, 320, 320);
+    myCard.special = voiceMenu(3, 316, 320);
 
   // Karte ist konfiguriert -> speichern
   writeCard(myCard);
@@ -915,7 +1034,7 @@ bool readCard(nfcTagObject *nfcTag) {
   Serial.print(F("Data in block "));
   Serial.print(blockAddr);
   Serial.println(F(":"));
-  dump_byte_array(buffer, 16);
+  dump_byte_array(buffer, 20);
   Serial.println();
   Serial.println();
 
@@ -925,23 +1044,42 @@ bool readCard(nfcTagObject *nfcTag) {
   tempCookie += (uint32_t)buffer[2] << 8;
   tempCookie += (uint32_t)buffer[3];
 
+  uint32_t tempColor;
+  tempColor = (uint32_t)buffer[8] << 24;
+  tempColor += (uint32_t)buffer[9] << 16;
+  tempColor += (uint32_t)buffer[10] << 8;
+  tempColor += (uint32_t)buffer[11];
+
   nfcTag->cookie = tempCookie;
   nfcTag->version = buffer[4];
   nfcTag->folder = buffer[5];
   nfcTag->mode = buffer[6];
   nfcTag->special = buffer[7];
+  nfcTag->color = tempColor;
 
   return returnValue;
 }
 
 void writeCard(nfcTagObject nfcTag) {
   MFRC522::PICC_Type mifareType;
-  byte buffer[16] = {0x13, 0x37, 0xb3, 0x47, // 0x1337 0xb347 magic cookie to
+
+uint8_t bytes[4];
+
+bytes[0] = (nfcTag.color >> 0)  & 0xFF;
+bytes[1] = (nfcTag.color >> 8)  & 0xFF;
+bytes[2] = (nfcTag.color >> 16) & 0xFF;
+bytes[3] = (nfcTag.color >> 24) & 0xFF;
+
+  byte buffer[20] = {0x13, 0x37, 0xb3, 0x47, // 0x1337 0xb347 magic cookie to
                                              // identify our nfc tags
                      0x01,                   // version 1
                      nfcTag.folder,          // the folder picked by the user
                      nfcTag.mode,    // the playback mode picked by the user
                      nfcTag.special, // track or function for admin cards
+                     bytes[3],  //Farbe welche eingeschaltet werden soll
+                     bytes[2],  //Farbe welche eingeschaltet werden soll
+                     bytes[1],  //Farbe welche eingeschaltet werden soll
+                     bytes[0],  //Farbe welche eingeschaltet werden soll
                      0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
 
   byte size = sizeof(buffer);
@@ -963,7 +1101,7 @@ void writeCard(nfcTagObject nfcTag) {
   Serial.print(F("Writing data into block "));
   Serial.print(blockAddr);
   Serial.println(F(" ..."));
-  dump_byte_array(buffer, 16);
+  dump_byte_array(buffer, 20);
   Serial.println();
   status = (MFRC522::StatusCode)mfrc522.MIFARE_Write(blockAddr, buffer, 16);
   if (status != MFRC522::STATUS_OK) {
@@ -985,4 +1123,15 @@ void dump_byte_array(byte *buffer, byte bufferSize) {
     Serial.print(buffer[i] < 0x10 ? " 0" : " ");
     Serial.print(buffer[i], HEX);
   }
+}
+
+void startTimer(){
+
+  // Start an alarm
+  timerAlarmEnable(timer);
+}
+
+void stoppTimer(){
+  timerEnd(timer);
+  timer = NULL;
 }
