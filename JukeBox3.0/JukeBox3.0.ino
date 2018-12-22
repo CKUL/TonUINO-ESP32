@@ -1,3 +1,5 @@
+
+
 // Verwendete Bibliotheken
 #include <WiFi.h>
 #include <WebServer.h>
@@ -12,11 +14,23 @@
 #include <JC_Button.h>
 #include <math.h>
 #include <FastLED.h>
+#include <Preferences.h>
+
+//EEPROM Speicher *NVS*
+Preferences preferences;
+int timeout = 20;
+
+
 //========================================================================
 //Hier nur VAriablen zum Testen
 
 int l = 0;
 bool headphoneIn =0 ;
+int success = 0;
+int success2 = 0;
+
+bool debug = false; // Auf true setzen um debug Informationen über die Serielle Schnittstelle zu erhalten.
+
 //Variablen zum Speichern von EInstellungen
 //========================================================================
 
@@ -29,17 +43,24 @@ unsigned int last_max_Volume;
 //WS2812b Einstellungen
 
 #define DATA_PIN 2 //signal pin 
-#define NUM_LEDS 2 //number of LEDs in your strip
+#define NUM_LEDS 7 //number of LEDs in your strip
 #define BRIGHTNESS 32  //brightness  (max 254) 
 #define LED_TYPE WS2811  // I know we are using ws2812, but it's ok!
 #define COLOR_ORDER GRB
 CRGB leds[NUM_LEDS];
 
+//============Sunrise Variablen===========================================
+DEFINE_GRADIENT_PALETTE( sunrise_gp ) {
+  0,     0,  0,  0,   //schwarz
+128,   240,  0,  0,   //rot
+224,   240,240,  0,   //gelb
+255,   128,128,240 }; //sehr helles Blau
 
+static uint16_t heatIndex = 0; // start out at 0
 
 //========================================================================
 //NTP Variablen
-WebServer server ( 80 );
+WebServer server(80);
 WiFiUDP ntpUDP;
 NTPClient timeClient(ntpUDP);
 
@@ -54,7 +75,8 @@ unsigned int akt_Volume = 10;
 bool TMP_OFFTIME = true;
 bool TMP_ONTIME = true;
 bool WakeUpLight = false;
-bool SleepUpLight = false;
+bool SleepLight = false;
+bool startSR = false;
 
 //Set Pins for RC522 Module
 const int resetPin = 22; // Reset pin
@@ -185,6 +207,7 @@ static void nextTrack() {
       // Fortschritt zurück setzen
       EEPROM.write(myCard.folder, 1);
   }
+  delay(500);
 }
 
 static void previousTrack() {
@@ -219,15 +242,6 @@ static void previousTrack() {
   }
 }
 
-// Replace with your network credentials
-const char* ssid     = "yourSSID";
-const char* password = "yourPW";
-
-// Set web server port number to 80
-//WiFiServer server(80);
-
-// Variable to store the HTTP request
-String header;
 
 MFRC522::MIFARE_Key key;
 bool successRead;
@@ -241,6 +255,7 @@ MFRC522::StatusCode status;
 #define buttonDown 27
 #define busyPin 4
 #define headphonePin 32
+#define dfpMute 33
 
 #define LONG_PRESS 1000
 
@@ -257,6 +272,42 @@ bool isPlaying() { return !digitalRead(busyPin); }
 
 
 //Funktion um die Antworten der HTML Seite auszuwerten
+void handleRestart(){
+  // Restart ESP
+  ESP.restart();
+}
+void handleSetup(){
+  server.send ( 200, "text/html", SetupPage());
+  if (server.args() > 0 ) { // Arguments were received
+    for ( uint8_t i = 0; i < server.args(); i++ ) {
+      
+      Serial.print("Vom Server wurde folgendes empfangen: "); // Display the argument
+      Serial.print(server.argName(i)); // Display the argument
+      Serial.print("=");
+      Serial.println(server.arg(i));
+      
+      if(server.argName(i) == "ssid" ){
+        Serial.print("Speichere SSID: ");
+        Serial.println(server.arg(i));
+        preferences.putString("SSID", server.arg(i));
+   
+      }
+        
+      else if(server.argName(i) == "pw"){
+        Serial.print("Speichere PW: ");
+        Serial.println(server.arg(i));
+        preferences.putString("Password", server.arg(i));
+
+      }
+
+
+      
+       
+    }
+     
+  }
+
+}
 void handleRoot(){ 
      server.send ( 200, "text/html", getPage() );
   if (server.args() > 0 ) { // Arguments were received
@@ -311,13 +362,14 @@ void handleRoot(){
       else if(server.argName(i) == "akt_volume"){
         myDFPlayer.volume(server.arg(i).toInt());
         akt_Volume = myDFPlayer.readVolume();
-        Serial.println("Die Lütstärke wurde geändert");
+        Serial.println("Die aktuelle Lütstärke wurde geändert");
         }
       else if(server.argName(i) == "max_volume"){
         max_Volume = server.arg(i).toInt();
+        Serial.println("Die maximale Lütstärke wurde geändert");
         }
       else if(server.argName(i) == "LED_color"){
-        Serial.println("Die Farbe der LEDs wird geändert ");
+        Serial.println("Die Farbe der LEDs wird geändert: " + server.arg(i));
          String Color = server.arg(i);
          char *ptr;
          char charBuf[Color.length() + 1];
@@ -328,19 +380,19 @@ void handleRoot(){
       }
       else if(server.argName(i) == "LED_bri"){
         Serial.println("Die Helligkeit der LEDs wird geändert ");
-        Serial.println("Helligkeit = " + server.arg(i).toInt());
+        Serial.println("Helligkeit = " + server.arg(i));
         FastLED.setBrightness(server.arg(i).toInt());
         FastLED.show(); 
       }
       else if(server.argName(i) == "cb_SleepLight_on"){
           //CODE HERE
           if(server.arg(i).toInt()==1){
-              SleepUpLight = true;
+              SleepLight = true;
           }
       }
       else if(server.argName(i) == "cb_SleepLight_off"){
           if(server.arg(i).toInt()==0){
-              SleepUpLight = false;
+              SleepLight = false;
           }
       }
       else if(server.argName(i) == "cb_WakeUpLight_on"){
@@ -440,12 +492,29 @@ void handleEQ_JAZZ() {
  myDFPlayer.EQ(DFPLAYER_EQ_JAZZ);
  server.send(200, "text/html", getPage()); 
 }
-//==========================================================================================
-
+//==============================Sonnenaufgang Simulation============================================================
+void sunrise() {
+  
+   
+  if(debug) Serial.println("sunrise() wird ausgeführt");
+  CRGBPalette256 sunrisePal = sunrise_gp;
+  CRGB color = ColorFromPalette(sunrisePal, heatIndex);
+  // fill the entire strip with the current color
+  fill_solid(leds, NUM_LEDS, color);
+  FastLED.show();
+  heatIndex++;
+  if(heatIndex==255){
+    heatIndex=0;
+    startSR = false;
+  } 
+  
+  
+}
 //==========================================================================================
 //Funktion um die Ein- /Ausschalttimer auszuwerten
 void TimeCompare(){
-  
+ 
+    if(debug) Serial.println("TimeCompare() wird ausgeführt");
     timeClient.update();
     int NTP_HH = timeClient.getHours();
     int NTP_MM = timeClient.getMinutes();
@@ -455,7 +524,14 @@ void TimeCompare(){
   
     if((TMR_OFF_MM == NTP_MM)and (TMP_OFFTIME==false)and (TMR_OFF_HH == NTP_HH)){
 
+        //Abschalttimer
         myDFPlayer.pause();
+        delay(100);
+        myDFPlayer.playMp3Folder(902); //Verabschiedung spielen
+        //myDFPlayer.outputDevice(DFPLAYER_DEVICE_SLEEP);
+        delay(10000);
+        while(isPlaying())
+        myDFPlayer.stop();
         if(TMR_OFF_REP == 0){TMP_OFFTIME = true;}
         Serial.println("Die Wiedergabe wurde durch den OFF-Timer gestoppt.");
       
@@ -463,14 +539,110 @@ void TimeCompare(){
 
     else if((TMR_ON_MM == NTP_MM)and (TMP_ONTIME==false)and (TMR_ON_HH == NTP_HH)){
 
-        myDFPlayer.start();
+        myDFPlayer.playMp3Folder(903); //Begrüßung spielen
+        //myDFPlayer.outputDevice(DFPLAYER_DEVICE_SD);
         if(TMR_ON_REP == 0){TMP_ONTIME = true;}
+        if(WakeUpLight == true){startSR = true;}
         Serial.println("Die Wiedergabe wurde durch den ON-Timer gestartet.");
       
     }
     
     
 }
+//======================WiFi=========================================================
+int WiFi_RouterNetworkConnect(char* txtSSID, char* txtPassword)
+{
+  int success = 1;
+  
+  // connect to WiFi network
+  // see https://www.arduino.cc/en/Reference/WiFiBegin
+  
+  WiFi.begin(txtSSID, txtPassword);
+  
+  // we wait until connection is established
+  // or 10 seconds are gone
+  
+  int WiFiConnectTimeOut = 0;
+  while ((WiFi.status() != WL_CONNECTED) && (WiFiConnectTimeOut < 10))
+  {
+    delay(1000);
+    WiFiConnectTimeOut++;
+  }
+
+  // not connected
+  if (WiFi.status() != WL_CONNECTED)
+  {
+    success = -1;
+  }
+
+  // print out local address of ESP32 in Router network (LAN)
+  Serial.println(WiFi.localIP());
+  if(debug) Serial.print("WiFi Connect to AP");
+  if(debug) Serial.println(String(success));
+  return success;
+}
+
+// Disconnect from router network and return 1 (success) or -1 (no success)
+int WiFi_RouterNetworkDisconnect()
+{
+  int success = -1;
+  
+  WiFi.disconnect();
+  
+
+  int WiFiConnectTimeOut = 0;
+  while ((WiFi.status() == WL_CONNECTED) && (WiFiConnectTimeOut < 10))
+  {
+    delay(1000);
+    WiFiConnectTimeOut++;
+  }
+
+  // not connected
+  if (WiFi.status() != WL_CONNECTED)
+  {
+    success = 1;
+  }
+  
+  Serial.println("Disconnected.");
+  
+  return success;
+}
+
+
+// Initialize Soft Access Point with ESP32
+// ESP32 establishes its own WiFi network, one can choose the SSID
+int WiFi_AccessPointStart(char* AccessPointNetworkSSID)
+{ 
+  WiFi.mode(WIFI_AP);
+  IPAddress apIP(192, 168, 4, 1);    // Hier wird IP bestimmt
+  WiFi.softAPConfig(apIP, apIP, IPAddress(255, 255, 255, 0));
+  WiFi.softAP("TonUINO");  // Name  des Access Points
+  delay(500);
+  if (debug)  Serial.println("Starte AP");
+  if (debug)  Serial.print("IP Adresse ");      //Ausgabe aktueller IP des Servers
+  if (debug)  Serial.println(WiFi.softAPIP());
+
+  //Ansage das ein Access-Point geöffnet wird
+  myDFPlayer.playMp3Folder(901);
+
+  server.on("/", handleSetup);                // INI wifimanager Index Webseite senden
+  server.on("/restart", []() {                 // INI wifimanager Index Webseite senden
+    server.send(200, "text/plain","ESP Reset wird durchgeführt");
+    handleRestart();
+  });
+
+  server.begin();
+  if(debug)  Serial.println("HTTP Server gestarted");
+  while (1){
+    server.handleClient();                 // Wird endlos ausgeführt damit das WLAN Setup erfolgen kann
+    if(digitalRead(buttonPause)==0)break; //Bricht die Warteschleife ab sobald die Play/Pause Taste gedrückt wurde
+  }
+  
+ 
+  return 1;
+}
+//===================================================================================
+
 
 void setup() {
 //======================ISR TIMER====================================================
@@ -493,11 +665,9 @@ void setup() {
 //===================================================================================
 // tell FastLED about the LED strip configuration
   FastLED.addLeds<WS2812B, DATA_PIN, RGB>(leds, NUM_LEDS);
-
   FastLED.setBrightness(BRIGHTNESS);  //Helligkeit einstellen
-  fill_solid(leds, NUM_LEDS, CRGB::LightSkyBlue); // Farbe aller LEDs ändern
+  fill_solid(leds, NUM_LEDS, CRGB::Black); // Farbe aller LEDs ändern
   FastLED.show();
-
 
 //===================================================================================
   
@@ -509,7 +679,9 @@ void setup() {
   mfrc522.PCD_DumpVersionToSerial();
 
   
-  pinMode(headphonePin, INPUT_PULLUP);
+  
+  pinMode(dfpMute, OUTPUT);
+  digitalWrite(dfpMute, LOW);
 
   
 
@@ -537,12 +709,14 @@ void setup() {
   }
 
   Serial.println("TonUINO V3.0 auf ESP32 Basis");
-  Serial.println("Original: T. Voss, Erweitert: C. Ulbrich");
+  Serial.println("Original V2.0: T. Voss, Erweitert V3.0: C. Ulbrich");
 
   Serial.println();
   Serial.println(F("DFRobot DFPlayer Mini"));
   Serial.println(F("Initializing DFPlayer ... (May take 3~5 seconds)"));
-  
+
+  myDFPlayer.begin(mySoftwareSerial,false,true);
+ /*
   if (!myDFPlayer.begin(mySoftwareSerial)) {  //Use softwareSerial to communicate with mp3.
     
     Serial.println(myDFPlayer.readType(),HEX);
@@ -552,14 +726,15 @@ void setup() {
     while(true);
   }
   Serial.println(F("DFPlayer Mini online."));
-
-  myDFPlayer.setTimeOut(500); //Set serial communictaion time out 500ms
+*/
   
+  myDFPlayer.setTimeOut(500); //Set serial communictaion time out 500ms
+  delay(100);
   //----Set volume----
   myDFPlayer.volume(10);  //Set volume value (0~30).
-  myDFPlayer.volumeUp(); //Volume Up
-  myDFPlayer.volumeDown(); //Volume Down
-  
+  //myDFPlayer.volumeUp(); //Volume Up
+  //myDFPlayer.volumeDown(); //Volume Down
+  delay(100);
   //----Set different EQ----
   myDFPlayer.EQ(DFPLAYER_EQ_NORMAL);
 //  myDFPlayer.EQ(DFPLAYER_EQ_POP);
@@ -567,7 +742,7 @@ void setup() {
 //  myDFPlayer.EQ(DFPLAYER_EQ_JAZZ);
 //  myDFPlayer.EQ(DFPLAYER_EQ_CLASSIC);
 //  myDFPlayer.EQ(DFPLAYER_EQ_BASS);
-  
+ delay(100); 
   //----Set device we use SD as default----
 //  myDFPlayer.outputDevice(DFPLAYER_DEVICE_U_DISK);
   myDFPlayer.outputDevice(DFPLAYER_DEVICE_SD);
@@ -597,25 +772,50 @@ void setup() {
   Serial.println(F("readFileCountsInFolder--------------------"));
   Serial.println(myDFPlayer.readFileCountsInFolder(3)); //read fill counts in folder SD:/03
   Serial.println(F("--------------------"));
+  delay(2000);
+  //Begrüßung abspielen, das überbrückt auch die Zeit des WLAN Connect
+  myDFPlayer.playMp3Folder(900);
   
+  preferences.begin("my-wifi",false);
+  if(debug)WiFi.mode(WIFI_AP_STA);
+  // takeout 2 Strings out of the Non-volatile storage
+  String strSSID = preferences.getString("SSID", "");
+  String strPassword = preferences.getString("Password", "");
+
+  // convert it to char*
+  char* txtSSID = const_cast<char*>(strSSID.c_str());
+  char* txtPassword = const_cast<char*>(strPassword.c_str());   // https://coderwall.com/p/zfmwsg/arduino-string-to-char 
+
+
   // Connect to Wi-Fi network with SSID and password
-  Serial.print("Connecting to ");
-  Serial.println(ssid);
-  WiFi.begin(ssid, password);
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
+  Serial.print("Connecting to SSID: ");
+  Serial.print(txtSSID);
+  Serial.print(" with the following PW:  ");
+  Serial.println(txtPassword);
+
+   // try to connect to the LAN
+   success = WiFi_RouterNetworkConnect(txtSSID, txtPassword);
+  if (success == 1)
+  {
+          fill_solid(leds, NUM_LEDS, CRGB::Blue); // Farbe aller LEDs ändern
+          FastLED.show();      
   }
-  // Print local IP address and start web server
-  Serial.println("");
-  Serial.println("WiFi connected.");
-  Serial.println("IP address: ");
-  Serial.println(WiFi.localIP());
+  else
+  {
+          fill_solid(leds, NUM_LEDS, CRGB::Red); // Farbe aller LEDs ändern
+          FastLED.show();  
+  }
+  
+  // Start access point"
+  if(success== -1)WiFi_AccessPointStart("ESP32_TonUINO");
+  
+  Serial.println ( "HTTP server started" );
+
 
   //NTP Client starten, das Offset zur Empfangenen Zeit einstellen
-  timeClient.begin();
-  timeClient.setTimeOffset(+7200); //+2h Offset
-  timeClient.update();
+  if(success == 1)timeClient.begin();
+  if(success == 1)timeClient.setTimeOffset(+3600); //+1h Offset
+  if(success == 1)timeClient.update();
   
   //Verweise für den Empfang von HTML Client informationen
   server.on ( "/", handleRoot );
@@ -631,38 +831,19 @@ void setup() {
   server.on ("/eq_classic", handleEQ_CLASSIC);
   server.on ("/eq_jazz", handleEQ_JAZZ);
   server.on ("/eq_norm", handleEQ_NORM);
+  server.on("/setup", handleSetup);
+  
   
   server.begin();
-  Serial1.println ( "HTTP server started" );
+  if(success==1)startTimer();
+  Serial.println ( "===============////////////// ================" );
+  Serial.println ( "===============/ SETUP ENDE / ================" );
+  Serial.println ( "===============/ //////////// ================" );
 }
 
 
 //==============SETUP ENDE================================
-void sunrise(int count){ 
-  
-  int rgb[2];
-  
-  if (count <= 44){
-  rgb[0] = round(4.94 * count);
-  rgb[1] = round(0.92 * count) + 45;
-  rgb[2] = round(-3.06 * count) + 170;
-  }
-  else if ( 44 <= count && count <= 55){
-  rgb[0] = round(5 * count);
-  rgb[1] = round(2.5 * count) + 45;
-  rgb[2] = round(-3.06 * count) + 170;
-  }
-  else{
-  rgb[0] = 255;
-  rgb[1] = round(3.58 * count);
-  rgb[2] = round(2.02 * count) - 40;
-  }
-  
-    leds[l].setRGB(rgb[0], rgb[1], rgb[2]);
-    leds[2].setRGB(rgb[0], rgb[1], rgb[2]);
-    FastLED.show();
 
-}
 
 void loop(){
  
@@ -677,11 +858,19 @@ void loop(){
       portEXIT_CRITICAL(&timerMux);
       //Ab hier Funktionen für Timer
 
+      if(success == 1) TimeCompare(); //Abfrage der Zeit im Sekundentakt
+      if(startSR == true) sunrise();
+      
+
     }
     server.handleClient();
-    TimeCompare();
     
-    //myDFPlayer.loop();
+    
+if (!isPlaying()) {
+  if (myDFPlayer.available()) {
+      printDetail(myDFPlayer.readType(), myDFPlayer.read()); //Print the detail message from DFPlayer to handle different errors and states.
+  }
+}
     // Buttons werden nun über JS_Button gehandelt, dadurch kann jede Taste
     // doppelt belegt werden
     pauseButton.read();
@@ -691,6 +880,8 @@ void loop(){
     //Erkennung ob ein Kopfhörer eingesteckt ist, "headphoneIn" verriegelt jeweils die Abfrage so das sie nur einmal durchlaufen wird
     if ((digitalRead(headphonePin)== 1) && (headphoneIn == 0)){
 
+      Serial.println("Kopfhörer wurde eingesteckt");
+      digitalWrite(dfpMute, HIGH);
       headphoneIn = 1;
       last_max_Volume = max_Volume; // Das letzte max. Volume merken
       last_Volume = myDFPlayer.readVolume();
@@ -699,8 +890,8 @@ void loop(){
           myDFPlayer.volume(10);
       }
       
-    } 
-    else if ((digitalRead(headphonePin)== 0) && (headphoneIn == 1)){
+    } else if ((digitalRead(headphonePin)== 0) && (headphoneIn == 1)){
+      Serial.println("Kopfhörer wurde entfernt");
       headphoneIn = 0;
       max_Volume = last_max_Volume;
       myDFPlayer.volume(last_Volume);
@@ -712,6 +903,8 @@ void loop(){
           myDFPlayer.pause();
           fill_solid(leds, NUM_LEDS, CRGB::Black); // Farbe aller LEDs ändern
           FastLED.show();
+          startSR = false;
+           heatIndex=0;
         }else{
           myDFPlayer.start();
           ignorePauseButton = false;
@@ -818,6 +1011,7 @@ void loop(){
         Serial.println(F("Hörbuch Modus -> kompletten Ordner spielen und "
                          "Fortschritt merken"));
         track = EEPROM.read(myCard.folder);
+        if(track==0)track=1;
         myDFPlayer.playFolder(myCard.folder, track);
         fill_solid(leds, NUM_LEDS, myCard.color); // Farbe aller LEDs ändern
         FastLED.show();
@@ -1135,3 +1329,60 @@ void stoppTimer(){
   timerEnd(timer);
   timer = NULL;
 }
+
+void printDetail(uint8_t type, int value){
+  switch (type) {
+    case TimeOut:
+      Serial.println(F("Time Out!"));
+      break;
+    case WrongStack:
+      Serial.println(F("Stack Wrong!"));
+      break;
+    case DFPlayerCardInserted:
+      Serial.println(F("Card Inserted!"));
+      break;
+    case DFPlayerCardRemoved:
+      Serial.println(F("Card Removed!"));
+      break;
+    case DFPlayerCardOnline:
+      Serial.println(F("Card Online!"));
+      break;
+    case DFPlayerPlayFinished:
+      Serial.print(F("Number:"));
+      Serial.print(value);
+      Serial.println(F(" Play Finished!"));
+      Mp3Notify::OnPlayFinished(track);
+      break;
+    case DFPlayerError:
+      Serial.print(F("DFPlayerError:"));
+      switch (value) {
+        case Busy:
+          Serial.println(F("Card not found"));
+          break;
+        case Sleeping:
+          Serial.println(F("Sleeping"));
+          break;
+        case SerialWrongStack:
+          Serial.println(F("Get Wrong Stack"));
+          break;
+        case CheckSumNotMatch:
+          Serial.println(F("Check Sum Not Match"));
+          break;
+        case FileIndexOut:
+          Serial.println(F("File Index Out of Bound"));
+          break;
+        case FileMismatch:
+          Serial.println(F("Cannot Find File"));
+          break;
+        case Advertise:
+          Serial.println(F("In Advertise"));
+          break;
+        default:
+          break;
+      }
+      break;
+    default:
+      break;
+  }
+}
+
