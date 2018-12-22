@@ -13,6 +13,15 @@ _[TonUINO V2.0](https://www.voss.earth/tonuino/) Code für ESP32 mit Erweiterung
   - Ambientlight mit WS2812 LED´s
     - ändern der Farbe über Webinterface
     
+  - Timer zum Ein- und Ausschalten
+    - Sonnenauf- und Untergang simulation für Einschalttimer
+    - MP3-Wiedergabe beim Ein- / Ausschalten
+    
+  - AP-Modus um WLAN konfigurieren zu können ohne dies (SSID, PW) im Code fest zu verankern
+    - Sprachansage bei Fehler mit der Verbindung
+   
+  - Begrüßung beim Einschalten 
+   
   - Kopfhörererkennung
     - reduziert die Lautstärke wenn Kopfhörer gesteckt
     - begrenz die Lautstärke wenn Kopfhörer gesteckt
@@ -29,6 +38,5 @@ _[TonUINO V2.0](https://www.voss.earth/tonuino/) Code für ESP32 mit Erweiterung
   - Speichern der Einstellungen im EEPROM / Flash
   - Tags verwalten
   
-  - Sonnenauf- und Untergang simulation für Ein- / Ausschalttimer
-    - Funktion bereits im Code, muss debugged werden
-  - AP-Modus um WLAN konfigurieren zu können ohne dies (SSID, PW) im Code fest zu verankern
+  
+  
