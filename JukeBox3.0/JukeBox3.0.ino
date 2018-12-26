@@ -5,7 +5,8 @@
 #include <WebServer.h>
 #include <NTPClient.h>
 #include <WiFiUdp.h>
-#include <TonUINO_html.h>
+#include "TonUINO_html.h"
+#include "TonUINO.h"
 #include <Arduino.h>
 #include "DFRobotDFPlayerMini.h"
 #include <SPI.h>
@@ -85,31 +86,12 @@ const int ssPin = 21;    // Slave select pin
 //Objekt zur kommunikation mit dem Modul anlegen
 MFRC522 mfrc522 = MFRC522(ssPin, resetPin); // Create instance
 
-// this object stores nfc tag data
-struct nfcTagObject {
-  uint32_t cookie;
-  uint8_t version;
-  uint8_t folder;
-  uint8_t mode;
-  uint8_t special;
-  uint32_t color;
-};
-
 //=======================Funktionen Deklarieren==============================
-
 nfcTagObject myCard;
-void resetCard(void);
-bool readCard(nfcTagObject *nfcTag);
-void setupCard(void);
-static void nextTrack();
-void startTimer(void);
-void stoppTimer(void);
-int voiceMenu(int numberOfOptions, int startMessage, int messageOffset,
-              bool preview = false, int previewFromFolder = 0);
-
 bool knownCard = false;
 uint16_t numTracksInFolder;
 uint16_t track;
+uint64_t chipid;
 
 //====================Timer Deklaration=====================================
 
@@ -297,6 +279,11 @@ void handleSetup(){
         Serial.print("Speichere PW: ");
         Serial.println(server.arg(i));
         preferences.putString("Password", server.arg(i));
+
+      } else if(server.argName(i) == "hostname") {
+        Serial.print("Speichere Hostname: ");
+        Serial.println(server.arg(i));
+        preferences.putString("Hostname", server.arg(i));
 
       }
 
@@ -550,7 +537,7 @@ void TimeCompare(){
     
 }
 //======================WiFi=========================================================
-int WiFi_RouterNetworkConnect(char* txtSSID, char* txtPassword)
+int WiFi_RouterNetworkConnect(char* txtSSID, char* txtPassword, char* txtHostname)
 {
   int success = 1;
   
@@ -558,6 +545,7 @@ int WiFi_RouterNetworkConnect(char* txtSSID, char* txtPassword)
   // see https://www.arduino.cc/en/Reference/WiFiBegin
   
   WiFi.begin(txtSSID, txtPassword);
+  WiFi.setHostname(txtHostname);
   
   // we wait until connection is established
   // or 10 seconds are gone
@@ -645,6 +633,7 @@ int WiFi_AccessPointStart(char* AccessPointNetworkSSID)
 
 
 void setup() {
+  chipid=ESP.getEfuseMac();
 //======================ISR TIMER====================================================
 // Create semaphore to inform us when the timer has fired
   timerSemaphore = xSemaphoreCreateBinary();
@@ -778,23 +767,27 @@ void setup() {
   
   preferences.begin("my-wifi",false);
   if(debug)WiFi.mode(WIFI_AP_STA);
-  // takeout 2 Strings out of the Non-volatile storage
+  // takeout 3 Strings out of the Non-volatile storage
   String strSSID = preferences.getString("SSID", "");
   String strPassword = preferences.getString("Password", "");
+  String strHostname = preferences.getString("Hostname", String("TonUINO-" + String((uint32_t)chipid)));
 
   // convert it to char*
   char* txtSSID = const_cast<char*>(strSSID.c_str());
   char* txtPassword = const_cast<char*>(strPassword.c_str());   // https://coderwall.com/p/zfmwsg/arduino-string-to-char 
-
+  char* txtHostname = const_cast<char*>(strHostname.c_str()); 
 
   // Connect to Wi-Fi network with SSID and password
   Serial.print("Connecting to SSID: ");
   Serial.print(txtSSID);
   Serial.print(" with the following PW:  ");
   Serial.println(txtPassword);
+  Serial.print(" with the following Hostname:  ");
+  Serial.println(txtHostname);
+
 
    // try to connect to the LAN
-   success = WiFi_RouterNetworkConnect(txtSSID, txtPassword);
+   success = WiFi_RouterNetworkConnect(txtSSID, txtPassword, txtHostname);
   if (success == 1)
   {
           fill_solid(leds, NUM_LEDS, CRGB::Blue); // Farbe aller LEDs ändern
@@ -807,7 +800,7 @@ void setup() {
   }
   
   // Start access point"
-  if(success== -1)WiFi_AccessPointStart("ESP32_TonUINO");
+  if(success== -1) WiFi_AccessPointStart("ESP32_TonUINO");
   
   Serial.println ( "HTTP server started" );
 
@@ -831,7 +824,7 @@ void setup() {
   server.on ("/eq_classic", handleEQ_CLASSIC);
   server.on ("/eq_jazz", handleEQ_JAZZ);
   server.on ("/eq_norm", handleEQ_NORM);
-  server.on("/setup", handleSetup);
+  server.on ("/setup", handleSetup);
   
   
   server.begin();
@@ -1320,7 +1313,6 @@ void dump_byte_array(byte *buffer, byte bufferSize) {
 }
 
 void startTimer(){
-
   // Start an alarm
   timerAlarmEnable(timer);
 }
@@ -1385,4 +1377,3 @@ void printDetail(uint8_t type, int value){
       break;
   }
 }
-
