@@ -16,6 +16,8 @@
 #include <math.h>
 #include <FastLED.h>
 #include <Preferences.h>
+#include <ESPmDNS.h>
+#include <Update.h>
 
 //EEPROM Speicher *NVS*
 Preferences preferences;
@@ -71,7 +73,7 @@ String TimerON = "00:00";
 uint8_t TMR_OFF_HH, TMR_OFF_MM,TMR_ON_HH,TMR_ON_MM;
 int TMR_OFF_REP = 0;
 int TMR_ON_REP = 0;
-unsigned int max_Volume = 20;
+unsigned int max_Volume = 40;
 unsigned int akt_Volume = 10;
 bool TMP_OFFTIME = true;
 bool TMP_ONTIME = true;
@@ -100,13 +102,13 @@ volatile SemaphoreHandle_t timerSemaphore;
 portMUX_TYPE timerMux = portMUX_INITIALIZER_UNLOCKED;
 
 volatile uint32_t isrCounter = 0;
-volatile uint32_t lastIsrAt = 0;
+volatile boolean isrRead = true;
 
 void IRAM_ATTR onTimer(){
   // Increment the counter and set the time of ISR
   portENTER_CRITICAL_ISR(&timerMux);
   isrCounter++;
-  lastIsrAt = millis();
+  isrRead = false;
   portEXIT_CRITICAL_ISR(&timerMux);
   // Give a semaphore that we can check in the loop
   xSemaphoreGiveFromISR(timerSemaphore, NULL);
@@ -143,7 +145,6 @@ public:
 
 HardwareSerial mySoftwareSerial(2);
 DFRobotDFPlayerMini myDFPlayer;
-void printDetail(uint8_t type, int value);
 
 // Leider kann das Modul keine Queue abspielen.
 static void nextTrack() {
@@ -650,15 +651,15 @@ void setup() {
   // Repeat the alarm (third parameter)
   timerAlarmWrite(timer, 1000000, true);
 
-//WS2812b Konfigurieren
-//===================================================================================
-// tell FastLED about the LED strip configuration
+  //WS2812b Konfigurieren
+  //===================================================================================
+  // tell FastLED about the LED strip configuration
   FastLED.addLeds<WS2812B, DATA_PIN, RGB>(leds, NUM_LEDS);
   FastLED.setBrightness(BRIGHTNESS);  //Helligkeit einstellen
   fill_solid(leds, NUM_LEDS, CRGB::Black); // Farbe aller LEDs ändern
   FastLED.show();
 
-//===================================================================================
+  //===================================================================================
   
   Serial.begin(115200);
   SPI.begin();
@@ -667,12 +668,8 @@ void setup() {
   mfrc522.PCD_Init();
   mfrc522.PCD_DumpVersionToSerial();
 
-  
-  
   pinMode(dfpMute, OUTPUT);
   digitalWrite(dfpMute, LOW);
-
-  
 
   // Knöpfe mit PullUp
   pinMode(headphonePin, INPUT_PULLUP);
@@ -683,7 +680,7 @@ void setup() {
   // Busy Pin
   pinMode(busyPin, INPUT);
 
-    for (byte i = 0; i < 6; i++) {
+  for (byte i = 0; i < 6; i++) {
     key.keyByte[i] = 0xFF;
   }
 
@@ -697,7 +694,7 @@ void setup() {
     }
   }
 
-  Serial.println("TonUINO V3.0 auf ESP32 Basis");
+  Serial.println("TonUINO V3.1 auf ESP32 Basis");
   Serial.println("Original V2.0: T. Voss, Erweitert V3.0: C. Ulbrich");
 
   Serial.println();
@@ -720,7 +717,7 @@ void setup() {
   myDFPlayer.setTimeOut(500); //Set serial communictaion time out 500ms
   delay(100);
   //----Set volume----
-  myDFPlayer.volume(10);  //Set volume value (0~30).
+  myDFPlayer.volume(15);  //Set volume value (0~30).
   //myDFPlayer.volumeUp(); //Volume Up
   //myDFPlayer.volumeDown(); //Volume Down
   delay(100);
@@ -759,9 +756,10 @@ void setup() {
   Serial.println(F("readCurrentFileNumber--------------------"));
   Serial.println(myDFPlayer.readCurrentFileNumber()); //read current play file number
   Serial.println(F("readFileCountsInFolder--------------------"));
-  Serial.println(myDFPlayer.readFileCountsInFolder(3)); //read fill counts in folder SD:/03
+  Serial.println(myDFPlayer.readFileCountsInFolder(2)); //read fill counts in folder SD:/03
   Serial.println(F("--------------------"));
   delay(2000);
+  
   //Begrüßung abspielen, das überbrückt auch die Zeit des WLAN Connect
   myDFPlayer.playMp3Folder(900);
   
@@ -784,7 +782,6 @@ void setup() {
   Serial.println(txtPassword);
   Serial.print(" with the following Hostname:  ");
   Serial.println(txtHostname);
-
 
    // try to connect to the LAN
    success = WiFi_RouterNetworkConnect(txtSSID, txtPassword, txtHostname);
@@ -825,6 +822,35 @@ void setup() {
   server.on ("/eq_jazz", handleEQ_JAZZ);
   server.on ("/eq_norm", handleEQ_NORM);
   server.on ("/setup", handleSetup);
+  server.on("/serverIndex", HTTP_GET, []() {
+    server.sendHeader("Connection", "close");
+    server.send(200, "text/html", serverIndex);
+  });
+  /*handling uploading firmware file */
+  server.on("/update", HTTP_POST, []() {
+    server.sendHeader("Connection", "close");
+    server.send(200, "text/plain", (Update.hasError()) ? "FAIL" : "OK");
+    ESP.restart();
+  }, []() {
+    HTTPUpload& upload = server.upload();
+    if (upload.status == UPLOAD_FILE_START) {
+      Serial.printf("Update: %s\n", upload.filename.c_str());
+      if (!Update.begin(UPDATE_SIZE_UNKNOWN)) { //start with max available size
+        Update.printError(Serial);
+      }
+    } else if (upload.status == UPLOAD_FILE_WRITE) {
+      /* flashing firmware to ESP*/
+      if (Update.write(upload.buf, upload.currentSize) != upload.currentSize) {
+        Update.printError(Serial);
+      }
+    } else if (upload.status == UPLOAD_FILE_END) {
+      if (Update.end(true)) { //true to set the size to the current progress
+        Serial.printf("Update Success: %u\nRebooting...\n", upload.totalSize);
+      } else {
+        Update.printError(Serial);
+      }
+    }
+});
   
   
   server.begin();
@@ -839,7 +865,6 @@ void setup() {
 
 
 void loop(){
- 
   do {
     
     if (xSemaphoreTake(timerSemaphore, 0) == pdTRUE){//Timer Interrupt Routine
@@ -847,7 +872,10 @@ void loop(){
       // Read the interrupt count and time
       portENTER_CRITICAL(&timerMux);
       isrCount = isrCounter;
-      isrTime = lastIsrAt;
+      if(isrRead == false) {
+        isrRead = true;
+        isrTime = millis();
+      }
       portEXIT_CRITICAL(&timerMux);
       //Ab hier Funktionen für Timer
 
@@ -900,6 +928,7 @@ if (!isPlaying()) {
            heatIndex=0;
         }else{
           myDFPlayer.start();
+
           ignorePauseButton = false;
     }
    }
@@ -1026,8 +1055,14 @@ if (!isPlaying()) {
 int voiceMenu(int numberOfOptions, int startMessage, int messageOffset,
               bool preview , int previewFromFolder) {
   int returnValue = 0;
-  if (startMessage != 0)
+
+  Serial.println(F("Will play file no.:"));
+  Serial.println(startMessage);
+  
+  if (startMessage != 0) {
     myDFPlayer.playMp3Folder(startMessage);
+    myDFPlayer.playMp3Folder(startMessage);
+  }
   do {
     pauseButton.read();
     upButton.read();

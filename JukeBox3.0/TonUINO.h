@@ -21,3 +21,5 @@ int voiceMenu(int numberOfOptions, int startMessage, int messageOffset,
               bool preview = false, int previewFromFolder = 0);
 
 void dump_byte_array(byte *buffer, byte bufferSize);
+
+void printDetail(uint8_t type, int value);
