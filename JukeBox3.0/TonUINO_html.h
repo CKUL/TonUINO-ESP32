@@ -1,3 +1,19 @@
+
+
+
+const char compile_date[] = __DATE__ " " __TIME__;
+
+String getFooter() {
+  String footer = "<footer class='footer' style='position: fixed; bottom: 0; left: 0; width: 100%; background: white'>";
+  footer += "<div class='footer'>";
+  footer += "<p class='text-muted'>Version: 3.1 compiletime: ";
+  footer += compile_date;
+  footer += "</p>";
+  footer += "</div>";
+  footer += "</footer>";
+  return footer;
+}
+
 //HTML Seite die Angezeigt werden soll
 String getPage(){
 String page = "<!DOCTYPE html>";
@@ -232,7 +248,8 @@ page += "					<input class='jscolor' value='ab2567' name='LED_color' id='LED_col
 page += "					<input type='range' min='0' max='255' value='64' name='LED_bri' class='slider' id='LED_bri'>";
 page += "					<input type='submit' value='ändern' class='btn btn-outline-success'>";
 page += "				</form>";
-page += "          </div>";
+page += "  </div>";
+page += getFooter();
 page += "  <script src='https://code.jquery.com/jquery-3.2.1.slim.min.js' integrity='sha384-KJ3o2DKtIkvYIK3UENzmM7KCkRr/rE9/Qpg6aAZGJwFDMVNA/GpGFF93hXpG5KkN' crossorigin='anonymous'></script>";
 page += "  <script src='https://cdnjs.cloudflare.com/ajax/libs/popper.js/1.12.9/umd/popper.min.js' integrity='sha384-ApNbgh9B+Y1QKtv3Rn7W3mgPxhU9K/ScQsAP7hUibX39j7fakFPskvXusvfa0b4Q' crossorigin='anonymous'></script>";
 page += "  <script src='https://maxcdn.bootstrapcdn.com/bootstrap/4.0.0/js/bootstrap.min.js' class='' crossorigin='anonymous' integrity='sha384-JZR6Spejh4U02d8jOt6vLEHfe/JQGiRRSQQxSfFWpi1MquVdAyjUar5+76PVCmYl'></script>";
@@ -272,40 +289,42 @@ return page;
 /*
  * Server Index Page
  */
- 
-const char* serverIndex = 
-"<script src='https://ajax.googleapis.com/ajax/libs/jquery/3.2.1/jquery.min.js'></script>"
-"<form method='POST' action='#' enctype='multipart/form-data' id='upload_form'>"
-   "<input type='file' name='update'>"
-        "<input type='submit' value='Update'>"
-    "</form>"
- "<div id='prg'>progress: 0%</div>"
- "<script>"
-  "$('form').submit(function(e){"
-  "e.preventDefault();"
-  "var form = $('#upload_form')[0];"
-  "var data = new FormData(form);"
-  " $.ajax({"
-  "url: '/update',"
-  "type: 'POST',"
-  "data: data,"
-  "contentType: false,"
-  "processData:false,"
-  "xhr: function() {"
-  "var xhr = new window.XMLHttpRequest();"
-  "xhr.upload.addEventListener('progress', function(evt) {"
-  "if (evt.lengthComputable) {"
-  "var per = evt.loaded / evt.total;"
-  "$('#prg').html('progress: ' + Math.round(per*100) + '%');"
-  "}"
-  "}, false);"
-  "return xhr;"
-  "},"
-  "success:function(d, s) {"
-  "console.log('success!')" 
- "},"
- "error: function (a, b, c) {"
- "}"
- "});"
- "});"
-"</script>";
+String UpdatePage(){
+String page = "<script src='https://ajax.googleapis.com/ajax/libs/jquery/3.2.1/jquery.min.js'></script>";
+  page += "<form method='POST' action='#' enctype='multipart/form-data' id='upload_form'>";
+  page += "<input type='file' name='upload'>";
+  page += "<input type='submit' value='Update'>";
+  page += "</form>";
+  page += "<div id='prg'>progress: 0%</div>";
+  page += "<script>";
+  page += "$('form').submit(function(e){";
+  page += "e.preventDefault();";
+  page += "var form = $('#upload_form')[0];";
+  page += "var data = new FormData(form);";
+  page += " $.ajax({";
+  page += "url: '/upload',";
+  page += "type: 'POST',";
+  page += "data: data,";
+  page += "contentType: false,";
+  page += "processData:false,";
+  page += "xhr: function() {";
+  page += "var xhr = new window.XMLHttpRequest();";
+  page += "xhr.upload.addEventListener('progress', function(evt) {";
+  page += "if (evt.lengthComputable) {";
+  page += "var per = evt.loaded / evt.total;";
+  page += "$('#prg').html('progress: ' + Math.round(per*100) + '%');";
+  page += "}";
+  page += "}, false);";
+  page += "return xhr;";
+  page += "},";
+  page += "success:function(d, s) {";
+  page += "console.log('success!')";
+  page += "},";
+  page += "error: function (a, b, c) {";
+  page += "}";
+  page += "});";
+  page += "});";
+  page += "</script>";
+
+  return page;
+}

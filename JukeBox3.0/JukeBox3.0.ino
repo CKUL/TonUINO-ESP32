@@ -16,7 +16,6 @@
 #include <math.h>
 #include <FastLED.h>
 #include <Preferences.h>
-#include <ESPmDNS.h>
 #include <Update.h>
 
 //EEPROM Speicher *NVS*
@@ -259,6 +258,11 @@ void handleRestart(){
   // Restart ESP
   ESP.restart();
 }
+
+void handleUpdate() {
+    server.send(200, "text/html", UpdatePage());
+}
+
 void handleSetup(){
   server.send ( 200, "text/html", SetupPage());
   if (server.args() > 0 ) { // Arguments were received
@@ -287,15 +291,10 @@ void handleSetup(){
         preferences.putString("Hostname", server.arg(i));
 
       }
-
-
-      
-       
     }
-     
   }
-
 }
+
 void handleRoot(){ 
      server.send ( 200, "text/html", getPage() );
   if (server.args() > 0 ) { // Arguments were received
@@ -635,8 +634,8 @@ int WiFi_AccessPointStart(char* AccessPointNetworkSSID)
 
 void setup() {
   chipid=ESP.getEfuseMac();
-//======================ISR TIMER====================================================
-// Create semaphore to inform us when the timer has fired
+  //======================ISR TIMER====================================================
+  // Create semaphore to inform us when the timer has fired
   timerSemaphore = xSemaphoreCreateBinary();
 
   // Use 1st timer of 4 (counted from zero).
@@ -723,25 +722,25 @@ void setup() {
   delay(100);
   //----Set different EQ----
   myDFPlayer.EQ(DFPLAYER_EQ_NORMAL);
-//  myDFPlayer.EQ(DFPLAYER_EQ_POP);
-//  myDFPlayer.EQ(DFPLAYER_EQ_ROCK);
-//  myDFPlayer.EQ(DFPLAYER_EQ_JAZZ);
-//  myDFPlayer.EQ(DFPLAYER_EQ_CLASSIC);
-//  myDFPlayer.EQ(DFPLAYER_EQ_BASS);
+  //  myDFPlayer.EQ(DFPLAYER_EQ_POP);
+  //  myDFPlayer.EQ(DFPLAYER_EQ_ROCK);
+  //  myDFPlayer.EQ(DFPLAYER_EQ_JAZZ);
+  //  myDFPlayer.EQ(DFPLAYER_EQ_CLASSIC);
+  //  myDFPlayer.EQ(DFPLAYER_EQ_BASS);
  delay(100); 
   //----Set device we use SD as default----
-//  myDFPlayer.outputDevice(DFPLAYER_DEVICE_U_DISK);
+  //  myDFPlayer.outputDevice(DFPLAYER_DEVICE_U_DISK);
   myDFPlayer.outputDevice(DFPLAYER_DEVICE_SD);
-//  myDFPlayer.outputDevice(DFPLAYER_DEVICE_AUX);
-//  myDFPlayer.outputDevice(DFPLAYER_DEVICE_SLEEP);
-//  myDFPlayer.outputDevice(DFPLAYER_DEVICE_FLASH);
+  //  myDFPlayer.outputDevice(DFPLAYER_DEVICE_AUX);
+  //  myDFPlayer.outputDevice(DFPLAYER_DEVICE_SLEEP);
+  //  myDFPlayer.outputDevice(DFPLAYER_DEVICE_FLASH);
   
   //----Mp3 control----
-//  myDFPlayer.sleep();     //sleep
-//  myDFPlayer.reset();     //Reset the module
-//  myDFPlayer.enableDAC();  //Enable On-chip DAC
-//  myDFPlayer.disableDAC();  //Disable On-chip DAC
-//  myDFPlayer.outputSetting(true, 15); //output setting, enable the output and set the gain to 15
+  //  myDFPlayer.sleep();     //sleep
+  //  myDFPlayer.reset();     //Reset the module
+  //  myDFPlayer.enableDAC();  //Enable On-chip DAC
+  //  myDFPlayer.disableDAC();  //Disable On-chip DAC
+  //  myDFPlayer.outputSetting(true, 15); //output setting, enable the output and set the gain to 15
 
   //----Read imformation----
   Serial.println("");
@@ -779,25 +778,24 @@ void setup() {
   Serial.print("Connecting to SSID: ");
   Serial.print(txtSSID);
   Serial.print(" with the following PW:  ");
-  Serial.println(txtPassword);
+  Serial.print(txtPassword);
   Serial.print(" with the following Hostname:  ");
   Serial.println(txtHostname);
 
    // try to connect to the LAN
    success = WiFi_RouterNetworkConnect(txtSSID, txtPassword, txtHostname);
-  if (success == 1)
-  {
-          fill_solid(leds, NUM_LEDS, CRGB::Blue); // Farbe aller LEDs ändern
-          FastLED.show();      
-  }
-  else
-  {
-          fill_solid(leds, NUM_LEDS, CRGB::Red); // Farbe aller LEDs ändern
-          FastLED.show();  
+  if (success == 1) {
+    fill_solid(leds, NUM_LEDS, CRGB::Blue); // Farbe aller LEDs ändern
+    FastLED.show();      
+  } else {
+    fill_solid(leds, NUM_LEDS, CRGB::Red); // Farbe aller LEDs ändern
+    FastLED.show();  
   }
   
   // Start access point"
-  if(success== -1) WiFi_AccessPointStart("ESP32_TonUINO");
+  if(success== -1) {
+    WiFi_AccessPointStart("ESP32_TonUINO");
+  }
   
   Serial.println ( "HTTP server started" );
 
@@ -822,12 +820,10 @@ void setup() {
   server.on ("/eq_jazz", handleEQ_JAZZ);
   server.on ("/eq_norm", handleEQ_NORM);
   server.on ("/setup", handleSetup);
-  server.on("/serverIndex", HTTP_GET, []() {
-    server.sendHeader("Connection", "close");
-    server.send(200, "text/html", serverIndex);
-  });
+  server.on ("/update", handleUpdate);
+  
   /*handling uploading firmware file */
-  server.on("/update", HTTP_POST, []() {
+  server.on("/upload", HTTP_POST, []() {
     server.sendHeader("Connection", "close");
     server.send(200, "text/plain", (Update.hasError()) ? "FAIL" : "OK");
     ESP.restart();
@@ -850,7 +846,7 @@ void setup() {
         Update.printError(Serial);
       }
     }
-});
+  });
   
   
   server.begin();
