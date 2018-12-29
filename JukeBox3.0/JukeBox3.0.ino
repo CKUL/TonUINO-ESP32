@@ -5,7 +5,8 @@
 #include <WebServer.h>
 #include <NTPClient.h>
 #include <WiFiUdp.h>
-#include <TonUINO_html.h>
+#include "TonUINO_html.h"
+#include "TonUINO.h"
 #include <Arduino.h>
 #include "DFRobotDFPlayerMini.h"
 #include <SPI.h>
@@ -15,6 +16,7 @@
 #include <math.h>
 #include <FastLED.h>
 #include <Preferences.h>
+#include <Update.h>
 
 //EEPROM Speicher *NVS*
 Preferences preferences;
@@ -70,7 +72,7 @@ String TimerON = "00:00";
 uint8_t TMR_OFF_HH, TMR_OFF_MM,TMR_ON_HH,TMR_ON_MM;
 int TMR_OFF_REP = 0;
 int TMR_ON_REP = 0;
-unsigned int max_Volume = 20;
+unsigned int max_Volume = 40;
 unsigned int akt_Volume = 10;
 bool TMP_OFFTIME = true;
 bool TMP_ONTIME = true;
@@ -85,31 +87,12 @@ const int ssPin = 21;    // Slave select pin
 //Objekt zur kommunikation mit dem Modul anlegen
 MFRC522 mfrc522 = MFRC522(ssPin, resetPin); // Create instance
 
-// this object stores nfc tag data
-struct nfcTagObject {
-  uint32_t cookie;
-  uint8_t version;
-  uint8_t folder;
-  uint8_t mode;
-  uint8_t special;
-  uint32_t color;
-};
-
 //=======================Funktionen Deklarieren==============================
-
 nfcTagObject myCard;
-void resetCard(void);
-bool readCard(nfcTagObject *nfcTag);
-void setupCard(void);
-static void nextTrack();
-void startTimer(void);
-void stoppTimer(void);
-int voiceMenu(int numberOfOptions, int startMessage, int messageOffset,
-              bool preview = false, int previewFromFolder = 0);
-
 bool knownCard = false;
 uint16_t numTracksInFolder;
 uint16_t track;
+uint64_t chipid;
 
 //====================Timer Deklaration=====================================
 
@@ -118,13 +101,13 @@ volatile SemaphoreHandle_t timerSemaphore;
 portMUX_TYPE timerMux = portMUX_INITIALIZER_UNLOCKED;
 
 volatile uint32_t isrCounter = 0;
-volatile uint32_t lastIsrAt = 0;
+volatile boolean isrRead = true;
 
 void IRAM_ATTR onTimer(){
   // Increment the counter and set the time of ISR
   portENTER_CRITICAL_ISR(&timerMux);
   isrCounter++;
-  lastIsrAt = millis();
+  isrRead = false;
   portEXIT_CRITICAL_ISR(&timerMux);
   // Give a semaphore that we can check in the loop
   xSemaphoreGiveFromISR(timerSemaphore, NULL);
@@ -161,7 +144,6 @@ public:
 
 HardwareSerial mySoftwareSerial(2);
 DFRobotDFPlayerMini myDFPlayer;
-void printDetail(uint8_t type, int value);
 
 // Leider kann das Modul keine Queue abspielen.
 static void nextTrack() {
@@ -276,6 +258,11 @@ void handleRestart(){
   // Restart ESP
   ESP.restart();
 }
+
+void handleUpdate() {
+    server.send(200, "text/html", UpdatePage());
+}
+
 void handleSetup(){
   server.send ( 200, "text/html", SetupPage());
   if (server.args() > 0 ) { // Arguments were received
@@ -298,16 +285,16 @@ void handleSetup(){
         Serial.println(server.arg(i));
         preferences.putString("Password", server.arg(i));
 
+      } else if(server.argName(i) == "hostname") {
+        Serial.print("Speichere Hostname: ");
+        Serial.println(server.arg(i));
+        preferences.putString("Hostname", server.arg(i));
+
       }
-
-
-      
-       
     }
-     
   }
-
 }
+
 void handleRoot(){ 
      server.send ( 200, "text/html", getPage() );
   if (server.args() > 0 ) { // Arguments were received
@@ -550,7 +537,7 @@ void TimeCompare(){
     
 }
 //======================WiFi=========================================================
-int WiFi_RouterNetworkConnect(char* txtSSID, char* txtPassword)
+int WiFi_RouterNetworkConnect(char* txtSSID, char* txtPassword, char* txtHostname)
 {
   int success = 1;
   
@@ -558,6 +545,7 @@ int WiFi_RouterNetworkConnect(char* txtSSID, char* txtPassword)
   // see https://www.arduino.cc/en/Reference/WiFiBegin
   
   WiFi.begin(txtSSID, txtPassword);
+  WiFi.setHostname(txtHostname);
   
   // we wait until connection is established
   // or 10 seconds are gone
@@ -645,8 +633,9 @@ int WiFi_AccessPointStart(char* AccessPointNetworkSSID)
 
 
 void setup() {
-//======================ISR TIMER====================================================
-// Create semaphore to inform us when the timer has fired
+  chipid=ESP.getEfuseMac();
+  //======================ISR TIMER====================================================
+  // Create semaphore to inform us when the timer has fired
   timerSemaphore = xSemaphoreCreateBinary();
 
   // Use 1st timer of 4 (counted from zero).
@@ -661,15 +650,15 @@ void setup() {
   // Repeat the alarm (third parameter)
   timerAlarmWrite(timer, 1000000, true);
 
-//WS2812b Konfigurieren
-//===================================================================================
-// tell FastLED about the LED strip configuration
+  //WS2812b Konfigurieren
+  //===================================================================================
+  // tell FastLED about the LED strip configuration
   FastLED.addLeds<WS2812B, DATA_PIN, RGB>(leds, NUM_LEDS);
   FastLED.setBrightness(BRIGHTNESS);  //Helligkeit einstellen
   fill_solid(leds, NUM_LEDS, CRGB::Black); // Farbe aller LEDs ändern
   FastLED.show();
 
-//===================================================================================
+  //===================================================================================
   
   Serial.begin(115200);
   SPI.begin();
@@ -678,12 +667,8 @@ void setup() {
   mfrc522.PCD_Init();
   mfrc522.PCD_DumpVersionToSerial();
 
-  
-  
   pinMode(dfpMute, OUTPUT);
   digitalWrite(dfpMute, LOW);
-
-  
 
   // Knöpfe mit PullUp
   pinMode(headphonePin, INPUT_PULLUP);
@@ -694,7 +679,7 @@ void setup() {
   // Busy Pin
   pinMode(busyPin, INPUT);
 
-    for (byte i = 0; i < 6; i++) {
+  for (byte i = 0; i < 6; i++) {
     key.keyByte[i] = 0xFF;
   }
 
@@ -708,7 +693,7 @@ void setup() {
     }
   }
 
-  Serial.println("TonUINO V3.0 auf ESP32 Basis");
+  Serial.println("TonUINO V3.1 auf ESP32 Basis");
   Serial.println("Original V2.0: T. Voss, Erweitert V3.0: C. Ulbrich");
 
   Serial.println();
@@ -731,31 +716,31 @@ void setup() {
   myDFPlayer.setTimeOut(500); //Set serial communictaion time out 500ms
   delay(100);
   //----Set volume----
-  myDFPlayer.volume(10);  //Set volume value (0~30).
+  myDFPlayer.volume(15);  //Set volume value (0~30).
   //myDFPlayer.volumeUp(); //Volume Up
   //myDFPlayer.volumeDown(); //Volume Down
   delay(100);
   //----Set different EQ----
   myDFPlayer.EQ(DFPLAYER_EQ_NORMAL);
-//  myDFPlayer.EQ(DFPLAYER_EQ_POP);
-//  myDFPlayer.EQ(DFPLAYER_EQ_ROCK);
-//  myDFPlayer.EQ(DFPLAYER_EQ_JAZZ);
-//  myDFPlayer.EQ(DFPLAYER_EQ_CLASSIC);
-//  myDFPlayer.EQ(DFPLAYER_EQ_BASS);
+  //  myDFPlayer.EQ(DFPLAYER_EQ_POP);
+  //  myDFPlayer.EQ(DFPLAYER_EQ_ROCK);
+  //  myDFPlayer.EQ(DFPLAYER_EQ_JAZZ);
+  //  myDFPlayer.EQ(DFPLAYER_EQ_CLASSIC);
+  //  myDFPlayer.EQ(DFPLAYER_EQ_BASS);
  delay(100); 
   //----Set device we use SD as default----
-//  myDFPlayer.outputDevice(DFPLAYER_DEVICE_U_DISK);
+  //  myDFPlayer.outputDevice(DFPLAYER_DEVICE_U_DISK);
   myDFPlayer.outputDevice(DFPLAYER_DEVICE_SD);
-//  myDFPlayer.outputDevice(DFPLAYER_DEVICE_AUX);
-//  myDFPlayer.outputDevice(DFPLAYER_DEVICE_SLEEP);
-//  myDFPlayer.outputDevice(DFPLAYER_DEVICE_FLASH);
+  //  myDFPlayer.outputDevice(DFPLAYER_DEVICE_AUX);
+  //  myDFPlayer.outputDevice(DFPLAYER_DEVICE_SLEEP);
+  //  myDFPlayer.outputDevice(DFPLAYER_DEVICE_FLASH);
   
   //----Mp3 control----
-//  myDFPlayer.sleep();     //sleep
-//  myDFPlayer.reset();     //Reset the module
-//  myDFPlayer.enableDAC();  //Enable On-chip DAC
-//  myDFPlayer.disableDAC();  //Disable On-chip DAC
-//  myDFPlayer.outputSetting(true, 15); //output setting, enable the output and set the gain to 15
+  //  myDFPlayer.sleep();     //sleep
+  //  myDFPlayer.reset();     //Reset the module
+  //  myDFPlayer.enableDAC();  //Enable On-chip DAC
+  //  myDFPlayer.disableDAC();  //Disable On-chip DAC
+  //  myDFPlayer.outputSetting(true, 15); //output setting, enable the output and set the gain to 15
 
   //----Read imformation----
   Serial.println("");
@@ -770,44 +755,47 @@ void setup() {
   Serial.println(F("readCurrentFileNumber--------------------"));
   Serial.println(myDFPlayer.readCurrentFileNumber()); //read current play file number
   Serial.println(F("readFileCountsInFolder--------------------"));
-  Serial.println(myDFPlayer.readFileCountsInFolder(3)); //read fill counts in folder SD:/03
+  Serial.println(myDFPlayer.readFileCountsInFolder(2)); //read fill counts in folder SD:/03
   Serial.println(F("--------------------"));
   delay(2000);
+  
   //Begrüßung abspielen, das überbrückt auch die Zeit des WLAN Connect
   myDFPlayer.playMp3Folder(900);
   
   preferences.begin("my-wifi",false);
   if(debug)WiFi.mode(WIFI_AP_STA);
-  // takeout 2 Strings out of the Non-volatile storage
+  // takeout 3 Strings out of the Non-volatile storage
   String strSSID = preferences.getString("SSID", "");
   String strPassword = preferences.getString("Password", "");
+  String strHostname = preferences.getString("Hostname", String("TonUINO-" + String((uint32_t)chipid)));
 
   // convert it to char*
   char* txtSSID = const_cast<char*>(strSSID.c_str());
   char* txtPassword = const_cast<char*>(strPassword.c_str());   // https://coderwall.com/p/zfmwsg/arduino-string-to-char 
-
+  char* txtHostname = const_cast<char*>(strHostname.c_str()); 
 
   // Connect to Wi-Fi network with SSID and password
   Serial.print("Connecting to SSID: ");
   Serial.print(txtSSID);
   Serial.print(" with the following PW:  ");
-  Serial.println(txtPassword);
+  Serial.print(txtPassword);
+  Serial.print(" with the following Hostname:  ");
+  Serial.println(txtHostname);
 
    // try to connect to the LAN
-   success = WiFi_RouterNetworkConnect(txtSSID, txtPassword);
-  if (success == 1)
-  {
-          fill_solid(leds, NUM_LEDS, CRGB::Blue); // Farbe aller LEDs ändern
-          FastLED.show();      
-  }
-  else
-  {
-          fill_solid(leds, NUM_LEDS, CRGB::Red); // Farbe aller LEDs ändern
-          FastLED.show();  
+   success = WiFi_RouterNetworkConnect(txtSSID, txtPassword, txtHostname);
+  if (success == 1) {
+    fill_solid(leds, NUM_LEDS, CRGB::Blue); // Farbe aller LEDs ändern
+    FastLED.show();      
+  } else {
+    fill_solid(leds, NUM_LEDS, CRGB::Red); // Farbe aller LEDs ändern
+    FastLED.show();  
   }
   
   // Start access point"
-  if(success== -1)WiFi_AccessPointStart("ESP32_TonUINO");
+  if(success== -1) {
+    WiFi_AccessPointStart("ESP32_TonUINO");
+  }
   
   Serial.println ( "HTTP server started" );
 
@@ -831,7 +819,34 @@ void setup() {
   server.on ("/eq_classic", handleEQ_CLASSIC);
   server.on ("/eq_jazz", handleEQ_JAZZ);
   server.on ("/eq_norm", handleEQ_NORM);
-  server.on("/setup", handleSetup);
+  server.on ("/setup", handleSetup);
+  server.on ("/update", handleUpdate);
+  
+  /*handling uploading firmware file */
+  server.on("/upload", HTTP_POST, []() {
+    server.sendHeader("Connection", "close");
+    server.send(200, "text/plain", (Update.hasError()) ? "FAIL" : "OK");
+    ESP.restart();
+  }, []() {
+    HTTPUpload& upload = server.upload();
+    if (upload.status == UPLOAD_FILE_START) {
+      Serial.printf("Update: %s\n", upload.filename.c_str());
+      if (!Update.begin(UPDATE_SIZE_UNKNOWN)) { //start with max available size
+        Update.printError(Serial);
+      }
+    } else if (upload.status == UPLOAD_FILE_WRITE) {
+      /* flashing firmware to ESP*/
+      if (Update.write(upload.buf, upload.currentSize) != upload.currentSize) {
+        Update.printError(Serial);
+      }
+    } else if (upload.status == UPLOAD_FILE_END) {
+      if (Update.end(true)) { //true to set the size to the current progress
+        Serial.printf("Update Success: %u\nRebooting...\n", upload.totalSize);
+      } else {
+        Update.printError(Serial);
+      }
+    }
+  });
   
   
   server.begin();
@@ -846,7 +861,6 @@ void setup() {
 
 
 void loop(){
- 
   do {
     
     if (xSemaphoreTake(timerSemaphore, 0) == pdTRUE){//Timer Interrupt Routine
@@ -854,7 +868,10 @@ void loop(){
       // Read the interrupt count and time
       portENTER_CRITICAL(&timerMux);
       isrCount = isrCounter;
-      isrTime = lastIsrAt;
+      if(isrRead == false) {
+        isrRead = true;
+        isrTime = millis();
+      }
       portEXIT_CRITICAL(&timerMux);
       //Ab hier Funktionen für Timer
 
@@ -907,6 +924,7 @@ if (!isPlaying()) {
            heatIndex=0;
         }else{
           myDFPlayer.start();
+
           ignorePauseButton = false;
     }
    }
@@ -1033,8 +1051,14 @@ if (!isPlaying()) {
 int voiceMenu(int numberOfOptions, int startMessage, int messageOffset,
               bool preview , int previewFromFolder) {
   int returnValue = 0;
-  if (startMessage != 0)
+
+  Serial.println(F("Will play file no.:"));
+  Serial.println(startMessage);
+  
+  if (startMessage != 0) {
     myDFPlayer.playMp3Folder(startMessage);
+    myDFPlayer.playMp3Folder(startMessage);
+  }
   do {
     pauseButton.read();
     upButton.read();
@@ -1320,7 +1344,6 @@ void dump_byte_array(byte *buffer, byte bufferSize) {
 }
 
 void startTimer(){
-
   // Start an alarm
   timerAlarmEnable(timer);
 }
@@ -1385,4 +1408,3 @@ void printDetail(uint8_t type, int value){
       break;
   }
 }
-

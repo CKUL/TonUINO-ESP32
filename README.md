@@ -33,6 +33,11 @@ _[TonUINO V2.0](https://www.voss.earth/tonuino/) Code für ESP32 mit Erweiterung
     - kurzes Drücken = Lautstärke +/-
     - langes Drücken = Lied +/-
     
+ **Layout**
+ 
+ 
+ ![fritzing Layout](https://raw.githubusercontent.com/lrep/TonUINO-ESP32/master/Fritzing/Layout_schema.png)
+ 
  **Noch offen und geplant:**
  
   - Speichern der Einstellungen im EEPROM / Flash
